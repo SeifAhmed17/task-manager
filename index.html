@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Process Lifecycle &amp; Task Manager</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='3' y='3' width='10' height='10' rx='2' fill='%2360cdff'/%3E%3C/svg%3E">
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#0d1014;--panel:#151920;--well:#0a0c10;--line:#262d37;--line2:#394250;
+  --text:#e7eaef;--muted:#929cab;--accent:#60cdff;
+  --c-new:#8f9bff;--c-ready:#f2c14e;--c-running:#5fd38d;--c-waiting:#e58ad8;--c-terminated:#f0616d;
+  --sans:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;
+  --mono:"Cascadia Mono","Cascadia Code",Consolas,ui-monospace,Menlo,monospace;
+}
+*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
+[hidden]{display:none!important}
+h1,h2,p,ol{margin:0}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 var(--sans)}
+.app{max-width:1480px;margin:0 auto;padding:14px clamp(12px,2vw,24px);display:flex;flex-direction:column;gap:12px}
+
+/* controls */
+.btn{font:600 14px/1.2 var(--sans);color:var(--text);background:#1d222b;border:1px solid var(--line2);border-radius:6px;padding:6px 12px;cursor:pointer;white-space:nowrap}
+.btn:hover{background:#262d38}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#06202c}
+.btn.primary:hover{background:#86d9ff}
+.btn.sm{padding:2px 9px;font-size:12px}
+.btn.kill:hover{color:var(--c-terminated);border-color:var(--c-terminated)}
+input,select{font:inherit;color:var(--text);background:var(--well);border:1px solid var(--line2);border-radius:6px;padding:6px 9px;width:100%;min-width:0}
+:is(.btn,input,select,.term-out):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* header */
+.top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px 24px}
+h1{font:600 20px/1.2 var(--sans)}
+.sub{color:var(--muted);font-size:12px}
+.sim{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.sim label{display:flex;align-items:center;gap:6px;color:var(--muted)}
+.sim select{width:auto}
+#play{min-width:74px}
+.clock{font:14px var(--mono);color:var(--muted);min-width:9ch;text-align:right}
+.clock b{color:var(--text)}
+
+/* panels */
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;min-width:0}
+h2{font:600 14px/1.3 var(--sans);color:var(--muted)}
+.head{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:10px}
+.head h2{margin-right:auto}
+
+/* KPI cards */
+.kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.kpi{display:flex;flex-direction:column;justify-content:space-between;gap:8px;padding:12px 14px}
+.kpi-row{display:flex;align-items:center;gap:10px}
+.val{margin-left:auto;font:600 20px/1.2 var(--sans);font-variant-numeric:tabular-nums;white-space:nowrap}
+.pill{font:600 12px/1 var(--sans);padding:3px 8px;border-radius:999px;color:var(--muted);background:#232a34}
+.pill.busy{color:var(--c-running)}
+.bar{height:6px;background:#232a34;border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);transform-origin:left;transform:scaleX(var(--v,0));transition:transform .25s}
+
+/* layout */
+.cols{display:grid;grid-template-columns:minmax(0,1fr) 420px;grid-template-rows:minmax(0,1fr);gap:12px}
+.col{display:flex;flex-direction:column;gap:12px;min-width:0;min-height:0}
+.tasks,.term,.log{display:flex;flex-direction:column}
+
+/* state diagram */
+.fsm-wrap{overflow-x:auto}
+#fsm{display:block;width:100%;min-width:600px;height:auto;max-height:min(300px,34vh)}
+.edge{color:#8792a1}
+.edge .line{fill:none;stroke:currentColor;stroke-width:1.6;stroke-opacity:.75}
+.edge .head{fill:currentColor}
+.edge text{fill:currentColor;font:500 12px var(--sans);paint-order:stroke;stroke:var(--panel);stroke-width:4px;stroke-linejoin:round}
+.node{cursor:pointer;outline:none}
+.node rect{fill:#1a1f27;stroke:var(--line2);stroke-width:1.5;transition:fill .3s,stroke .3s}
+.node.on rect{fill:color-mix(in srgb,var(--c) 14%,#151920);stroke:var(--c)}
+.node:hover rect{stroke:var(--c)}
+.node.sel rect{stroke:var(--c);stroke-width:3.5}
+.node:focus-visible rect{stroke:var(--accent);stroke-width:3.5}
+.node .nm{fill:var(--text);font:600 14px var(--sans);text-anchor:middle}
+.node .ct{fill:var(--muted);font:12px var(--mono);text-anchor:middle}
+.token{fill:currentColor}
+
+/* create form */
+#create{display:grid;gap:10px}
+.fields{display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px}
+#create label{display:grid;gap:4px;font-size:12px;color:var(--muted)}
+.row-btn{display:flex;flex-wrap:wrap;gap:8px}
+#formMsg{font-size:12px;min-height:17px;color:var(--muted)}
+#formMsg.err{color:var(--c-terminated)}
+
+/* task list */
+.cmdbar{display:flex;align-items:center;flex:1 1 280px;min-width:0;background:var(--well);border:1px solid var(--line2);border-radius:6px;padding:0 9px;font:12px var(--mono);color:var(--muted)}
+.cmdbar:focus-within{border-color:var(--accent)}
+.cmdbar span{white-space:nowrap}
+.cmdbar input{flex:1;border:0;background:none;padding:7px 2px 7px 7px;font:inherit;outline:none}
+.chip{font:600 12px var(--sans);color:var(--c);background:color-mix(in srgb,var(--c) 13%,transparent);border:0;border-radius:999px;padding:4px 10px;cursor:pointer}
+.tablewrap{max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+table{width:100%;min-width:640px;border-collapse:collapse}
+th{position:sticky;top:0;z-index:1;background:#1a1f27;text-align:left;font:600 12px var(--sans);color:var(--muted);padding:7px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+th:last-child{width:216px}
+td{padding:4px 12px;height:36px;border-bottom:1px solid #1f252d;white-space:nowrap}
+.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+td.nm{max-width:240px;overflow:hidden;text-overflow:ellipsis}
+tr.s-running{background:color-mix(in srgb,var(--c-running) 7%,transparent)}
+tr.s-terminated td:not(:nth-child(3)){opacity:.45}
+.acts{display:flex;gap:6px}
+.badge{--c:var(--muted);display:inline-block;padding:1px 9px;border-radius:999px;font:600 12px/1.5 var(--sans);color:var(--c);background:color-mix(in srgb,var(--c) 13%,transparent)}
+#empty{padding:16px 12px;font:12px var(--mono);color:var(--muted)}
+
+/* terminal */
+.term-out{height:200px;overflow:auto;background:var(--well);border:1px solid var(--line);border-bottom:0;border-radius:8px 8px 0 0;padding:8px 10px;font:12px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;color:#c5cdd8}
+.term-out .echo{color:#fff}
+.term-out .ok{color:var(--c-running)}
+.term-out .err{color:var(--c-terminated)}
+.term-out .info{color:var(--muted)}
+.term-in{display:flex;align-items:center;background:var(--well);border:1px solid var(--line);border-radius:0 0 8px 8px;padding:0 10px;font:12px var(--mono)}
+.term-in:focus-within{border-color:var(--accent)}
+.term-in input{flex:1;border:0;background:none;padding:8px;font:inherit;outline:none}
+
+/* event log */
+#log{height:200px;overflow:auto;list-style:none;padding:0;font-size:12px}
+#log:empty::after{content:"No events yet.";color:var(--muted)}
+#log li{display:grid;grid-template-columns:auto 1fr;gap:0 10px;padding:4px 2px;border-bottom:1px solid #1f252d}
+#log time,#log .meta{color:var(--muted)}
+#log time{font-family:var(--mono)}
+#log .st{color:var(--c);font-weight:600}
+
+/* wide screens: the whole dashboard fits one window, lists scroll inside their panels */
+@media (min-width:1100px) and (min-height:720px){
+  .app{height:100vh}
+  .cols{flex:1;min-height:0}
+  .tasks,.term,.log{flex:1;min-height:0}
+  .tablewrap,.term-out,#log{flex:1;height:auto;max-height:none;min-height:0}
+}
+@media (max-width:1099px){
+  .cols{display:flex;flex-direction:column}
+  .col{display:contents}
+  .create{order:1}.tasks{order:2}.term{order:3}.log{order:4}
+}
+@media (max-width:700px){
+  .kpis{grid-template-columns:1fr}
+  .cmdbar span{display:none}
+  .cmdbar input{padding-left:0}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="top">
+    <div>
+      <h1>Process Lifecycle &amp; Task Manager</h1>
+      <p class="sub">One CPU, round-robin scheduling, <span id="q"></span>-tick quantum</p>
+    </div>
+    <div class="sim">
+      <button id="play" class="btn primary" type="button">Pause</button>
+      <button id="step" class="btn" type="button">Step</button>
+      <label>Speed
+        <select id="speed">
+          <option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
+        </select>
+      </label>
+      <span class="clock">tick <b id="tick">0</b></span>
+    </div>
+  </header>
+
+  <section class="kpis" aria-label="System resources">
+    <article class="panel kpi">
+      <div class="kpi-row"><h2>CPU utilization</h2><span class="pill" id="cpuStatus">Idle</span><b class="val" id="cpuPct">0%</b></div>
+      <div class="bar"><i id="cpuBar"></i></div>
+    </article>
+    <article class="panel kpi">
+      <div class="kpi-row"><h2>Total memory allocated</h2><b class="val" id="memVal"></b></div>
+      <div class="bar"><i id="memBar"></i></div>
+    </article>
+    <article class="panel kpi">
+      <div class="kpi-row"><h2>Active processes</h2><b class="val" id="active">0</b></div>
+      <p class="sub" id="activeSub"></p>
+    </article>
+  </section>
+
+  <main class="cols">
+    <div class="col">
+      <section class="panel diagram">
+        <div class="head"><h2>Process state machine</h2><span class="sub">Select a state to filter the task list</span></div>
+        <div class="fsm-wrap"><svg id="fsm" viewBox="0 24 760 292" aria-label="Process state diagram"></svg></div>
+      </section>
+
+      <section class="panel tasks">
+        <div class="head">
+          <h2>Tasks</h2>
+          <label class="cmdbar"><span>tasklist /fi "IMAGENAME eq</span><input id="filter" type="search" placeholder="chrome.exe" autocomplete="off" spellcheck="false" aria-label="Filter tasks by image name or PID"><span>"</span></label>
+          <button id="stateChip" class="chip" type="button" hidden></button>
+          <button id="reap" class="btn sm" type="button">Clear terminated</button>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>Image Name</th><th class="num">PID</th><th>State</th><th class="num">CPU Time</th><th class="num">Mem Usage (K)</th><th>Actions</th></tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+          <p id="empty" hidden>INFO: No tasks are running which match the specified criteria.</p>
+        </div>
+      </section>
+    </div>
+
+    <div class="col">
+      <section class="panel create">
+        <div class="head"><h2>Create process</h2></div>
+        <form id="create">
+          <div class="fields">
+            <label>Image name<input id="pname" list="names" required maxlength="32" value="chrome.exe" autocomplete="off" spellcheck="false"></label>
+            <label>Burst (ticks)<input id="pburst" type="number" min="1" max="99" value="8" required></label>
+            <label>Memory (MB)<input id="pmem" type="number" min="1" max="16384" value="256" required></label>
+          </div>
+          <datalist id="names"></datalist>
+          <div class="row-btn">
+            <button class="btn primary">Create process</button>
+            <button id="batch" class="btn" type="button">Spawn 5 processes</button>
+          </div>
+          <p id="formMsg" role="status"></p>
+        </form>
+      </section>
+
+      <section class="panel term">
+        <div class="head"><h2>Command prompt</h2></div>
+        <div id="termOut" class="term-out" role="log" aria-label="Terminal output" tabindex="0"></div>
+        <form id="termForm" class="term-in">
+          <label for="cmd">C:\&gt;</label>
+          <input id="cmd" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="taskkill /f /pid 1234">
+        </form>
+      </section>
+
+      <section class="panel log">
+        <div class="head"><h2>System event log</h2></div>
+        <ol id="log" aria-label="State transitions, newest first"></ol>
+      </section>
+    </div>
+  </main>
+</div>
+
+<script>
+'use strict';
+/* ================= engine (no DOM) ================= */
+// ponytail: one CPU, fixed-quantum round-robin. Add a scheduler picker (FCFS/SJF/priority) if the lesson needs comparison.
+const STATES = ['New', 'Ready', 'Running', 'Waiting', 'Terminated'];
+const QUANTUM = 3, TOTAL_MEM = 16384, UTIL_WINDOW = 20;
+const rnd = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+const fmtN = n => n.toLocaleString('en-US');
+const fmtTime = t => `${Math.floor(t / 3600)}:${String(Math.floor(t / 60) % 60).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+
+// busy: 1/0 per recent tick (CPU utilization). events: transitions not yet drawn.
+const S = {tick: 0, procs: [], ready: [], running: null, pids: new Set(), busy: [], events: []};
+const memUsed = () => S.procs.reduce((a, p) => a + (p.state === 'Terminated' ? 0 : p.mem), 0);
+const live = () => S.procs.filter(p => p.state !== 'Terminated');
+
+// The only place a process changes state: keeps the ready queue, the CPU slot and the log consistent.
+function move(p, to, label) {
+  const from = p.state;
+  if (from === 'Ready') S.ready.splice(S.ready.indexOf(p), 1);
+  if (S.running === p) S.running = null;
+  p.state = to;
+  if (to === 'Ready') S.ready.push(p);
+  if (to === 'Running') { S.running = p; p.slice = 0; }
+  if (to === 'Waiting') p.io = rnd(2, 5);
+  S.events.push({at: new Date(), pid: p.pid, name: p.name, from, to, label});
+}
+
+function create(name, burst, mem) {
+  name = String(name ?? '').trim().slice(0, 32); burst = Math.round(+burst); mem = Math.round(+mem);
+  if (!name) return {error: 'Enter an image name.'};
+  if (!(burst >= 1 && burst <= 99)) return {error: 'Burst time must be 1 to 99 ticks.'};
+  if (!(mem >= 1 && mem <= TOTAL_MEM)) return {error: `Memory must be 1 to ${fmtN(TOTAL_MEM)} MB.`};
+  if (memUsed() + mem > TOTAL_MEM) return {error: `Not enough memory: only ${fmtN(TOTAL_MEM - memUsed())} MB free. Kill a process first.`};
+  if (S.pids.size >= 9000) return {error: 'All 4-digit PIDs are used. Reload the page.'};
+  let pid;
+  do pid = rnd(1000, 9999); while (S.pids.has(pid));
+  S.pids.add(pid);
+  const p = {pid, name, burst, left: burst, cpu: 0, mem, slice: 0, io: 0, state: null};
+  S.procs.push(p);
+  move(p, 'New', 'Created');
+  return {proc: p};
+}
+
+// One clock tick. Order (execute, dispatch, I/O, admit) means every state is held for at least one tick.
+function tick() {
+  S.tick++;
+  const r = S.running;
+  if (r) {
+    r.cpu++; r.left--; r.slice++;
+    if (r.left <= 0) move(r, 'Terminated', 'Exit');
+    else if (r.slice >= QUANTUM && S.ready.length) move(r, 'Ready', 'Interrupt');
+  }
+  if (!S.running && S.ready.length) move(S.ready[0], 'Running', 'Dispatched');
+  for (const p of S.procs) {
+    if (p.state === 'Waiting' && --p.io <= 0) move(p, 'Ready', 'I/O or Event Completion');
+  }
+  const next = S.procs.find(p => p.state === 'New');
+  if (next) move(next, 'Ready', 'Admitted');
+  S.busy.push(r ? 1 : 0);
+  if (S.busy.length > UTIL_WINDOW) S.busy.shift();
+}
+
+function act(kind, pid) {
+  const p = S.procs.find(p => p.pid === +pid);
+  if (!p || p.state === 'Terminated') return;
+  if (kind === 'kill') move(p, 'Terminated', 'Killed');
+  else if (p.state !== 'Running') return;
+  else if (kind === 'interrupt') move(p, 'Ready', 'Interrupt');
+  else if (kind === 'io') move(p, 'Waiting', 'I/O or Event Wait');
+}
+
+/* ================= commands: each returns [text, cssClass] lines ================= */
+const errLines = (msg, cmd) => [[msg, 'err'], [`Type "${cmd} /?" for usage.`, 'err']];
+const HELP = ['Supported commands:', '  tasklist', '  tasklist /fi "IMAGENAME eq chrome.exe"', '  taskkill /pid <PID>', '  taskkill /f /pid <PID>', '  cls'].map(l => [l, 'info']);
+
+function tasklist(args) {
+  let list = live();
+  if (args.length) {
+    const m = /^imagename\s+eq\s+(\S.*)$/i.exec(args[1] || '');
+    if (args[0].toLowerCase() !== '/fi' || args.length > 2) return errLines(`ERROR: Invalid argument/option - '${args[0]}'.`, 'TASKLIST');
+    if (!m) return [['ERROR: The search filter cannot be recognized.', 'err']];
+    list = list.filter(p => p.name.toLowerCase() === m[1].trim().toLowerCase());
+  }
+  if (!list.length) return [['INFO: No tasks are running which match the specified criteria.', 'info']];
+  const row = (n, p, s, m) => `${n.slice(0, 18).padEnd(18)} ${String(p).padStart(5)} ${s.padEnd(10)} ${m.padStart(12)}`;
+  const eq = n => '='.repeat(n);
+  return [[''], [row('Image Name', 'PID', 'State', 'Mem Usage')], [row(eq(18), eq(5), eq(10), eq(12))],
+    ...list.map(p => [row(p.name, p.pid, p.state, fmtN(p.mem * 1024) + ' K')])];
+}
+
+function taskkill(args) {
+  let force = false;
+  const pids = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i].toLowerCase();
+    if (a === '/f') force = true;
+    else if (a === '/pid' && args[i + 1] !== undefined) pids.push(args[++i]);
+    else if (a === '/pid') return errLines("ERROR: Invalid syntax. Value expected for '/pid'.", 'TASKKILL');
+    else return errLines(`ERROR: Invalid argument/option - '${args[i]}'.`, 'TASKKILL');
+  }
+  if (!pids.length) return errLines('ERROR: Invalid syntax. Neither /FI nor /PID nor /IM were specified.', 'TASKKILL');
+  return pids.map(v => {
+    const p = live().find(p => String(p.pid) === v);
+    if (!p) return [`ERROR: The process "${v}" not found.`, 'err'];
+    move(p, 'Terminated', force ? 'taskkill /f' : 'taskkill');
+    return [force ? `SUCCESS: The process with PID ${v} has been terminated.` : `SUCCESS: Sent termination signal to the process with PID ${v}.`, 'ok'];
+  });
+}
+
+function exec(line) {
+  const args = (line.match(/"[^"]*"|\S+/g) || []).map(a => a.replace(/^"|"$/g, ''));
+  if (!args.length) return [];
+  const raw = args.shift(), cmd = raw.toLowerCase().replace(/\.exe$/, '');
+  if (cmd === 'tasklist') return tasklist(args);
+  if (cmd === 'taskkill') return taskkill(args);
+  if (cmd === 'help') return HELP;
+  if (cmd === 'cls') { $('termOut').replaceChildren(); return []; }
+  return [[`'${raw}' is not recognized as an internal or external command,`, 'err'], ['operable program or batch file.', 'err']];
+}
+
+/* ================= UI ================= */
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
+const cvar = s => `var(--c-${s.toLowerCase()})`;
+const COLOR = Object.fromEntries(STATES.map(s => [s, getComputedStyle(document.documentElement).getPropertyValue('--c-' + s.toLowerCase()).trim()]));
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const ui = {q: '', state: null};
+const POOL = ['chrome.exe', 'code.exe', 'notepad.exe', 'explorer.exe', 'msedge.exe', 'powershell.exe', 'spotify.exe', 'discord.exe', 'svchost.exe', 'python.exe', 'node.exe', 'steam.exe'];
+
+/* ----- state diagram ----- */
+const NODES = {New: [80, 70], Ready: [250, 150], Running: [510, 150], Waiting: [380, 275], Terminated: [680, 70]};
+const EDGES = [ // from, to, label, path, label x, label y, text-anchor
+  ['New', 'Ready', 'Admitted', 'M110 97C110 135 150 150 188 150', 118, 154, 'end'],
+  ['Ready', 'Running', 'Dispatched', 'M312 150L448 150', 380, 141, 'middle'],
+  ['Running', 'Ready', 'Interrupt', 'M480 123C440 70 320 70 280 123', 380, 73, 'middle'],
+  ['Running', 'Waiting', 'I/O or Event Wait', 'M510 177C510 240 480 275 442 275', 522, 238, 'start'],
+  ['Waiting', 'Ready', 'I/O or Event Completion', 'M318 275C280 275 250 240 250 177', 238, 238, 'end'],
+  ['Running', 'Terminated', 'Exit', 'M572 150C610 150 650 135 650 97', 648, 154, 'start'],
+];
+const fsm = $('fsm');
+function buildDiagram() {
+  fsm.innerHTML =
+    EDGES.map(([f, t, label, d, x, y, anchor]) =>
+      `<g class="edge" data-k="${f}>${t}"><path class="line" d="${d}"/><path class="head" d="M0 0L-9-4.5L-9 4.5Z"/><text x="${x}" y="${y}" text-anchor="${anchor}">${label}</text></g>`).join('') +
+    STATES.map(s => {
+      const [x, y] = NODES[s];
+      return `<g class="node" data-s="${s}" style="--c:${cvar(s)}" tabindex="0" role="button"><rect x="${x - 62}" y="${y - 27}" width="124" height="54" rx="12"/>` +
+        `<text class="nm" x="${x}" y="${y - 2}">${s}</text><text class="ct" x="${x}" y="${y + 15}"></text></g>`;
+    }).join('') +
+    '<g id="tokens"></g>';
+  for (const g of fsm.querySelectorAll('.edge')) { // aim each arrowhead along its path's end tangent
+    const line = g.querySelector('.line'), len = line.getTotalLength(), a = line.getPointAtLength(len - 2), b = line.getPointAtLength(len);
+    g.querySelector('.head').setAttribute('transform', `translate(${b.x} ${b.y}) rotate(${Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI})`);
+  }
+}
+
+// Flash the edge in the destination colour and send a dot along it.
+function animate(from, to) {
+  if (!from || document.hidden) return;
+  const col = COLOR[to], edge = fsm.querySelector(`.edge[data-k="${from}>${to}"]`);
+  let at; // position along the transition, t in 0..1
+  if (edge) {
+    const line = edge.querySelector('.line'), len = line.getTotalLength();
+    edge.animate([{offset: 0, color: col}, {offset: .55, color: col}], {duration: 950});
+    line.animate([{offset: 0, strokeWidth: '3px', strokeOpacity: 1}, {offset: .55, strokeWidth: '3px', strokeOpacity: 1}], {duration: 950});
+    at = t => line.getPointAtLength(t * len);
+  } else { // a kill from New/Ready/Waiting has no classic edge: fly straight to Terminated
+    const [x1, y1] = NODES[from], [x2, y2] = NODES[to];
+    at = t => ({x: x1 + (x2 - x1) * t, y: y1 + (y2 - y1) * t});
+  }
+  if (reducedMotion.matches) return;
+  const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  dot.setAttribute('r', 6); dot.setAttribute('class', 'token'); dot.style.color = col;
+  $('tokens').append(dot);
+  const t0 = performance.now();
+  (function frame(now) {
+    const t = Math.min(1, (now - t0) / 600), pt = at(t < .5 ? 2 * t * t : 1 - (2 - 2 * t) ** 2 / 2);
+    dot.setAttribute('cx', pt.x); dot.setAttribute('cy', pt.y);
+    if (t < 1) requestAnimationFrame(frame); else dot.remove();
+  })(t0);
+}
+
+/* ----- render ----- */
+const rowEls = new Map(); // proc -> <tr>; rows are updated in place so a click never lands on a replaced button
+const actBtn = (act, p, label) => `<button class="btn sm ${act}" type="button" data-act="${act}" data-pid="${p.pid}" aria-label="${label} PID ${p.pid}">${label}</button>`;
+
+function render() {
+  const counts = Object.fromEntries(STATES.map(s => [s, 0]));
+  for (const p of S.procs) counts[p.state]++;
+  const util = S.busy.length ? Math.round(100 * S.busy.reduce((a, b) => a + b, 0) / S.busy.length) : 0, used = memUsed();
+  $('tick').textContent = S.tick;
+
+  // KPIs
+  $('cpuPct').textContent = util + '%';
+  $('cpuBar').style.setProperty('--v', util / 100);
+  $('cpuStatus').textContent = S.running ? 'Busy' : 'Idle';
+  $('cpuStatus').classList.toggle('busy', !!S.running);
+  $('memVal').textContent = `${fmtN(used)} / ${fmtN(TOTAL_MEM)} MB`;
+  $('memBar').style.setProperty('--v', used / TOTAL_MEM);
+  $('active').textContent = S.procs.length - counts.Terminated;
+  $('activeSub').textContent = `${counts.Ready} in the ready queue, ${counts.Waiting} waiting on I/O`;
+
+  // diagram
+  for (const g of fsm.querySelectorAll('.node')) {
+    const s = g.dataset.s, n = counts[s], txt = `${n} process${n === 1 ? '' : 'es'}`;
+    g.classList.toggle('on', n > 0);
+    g.classList.toggle('sel', ui.state === s);
+    g.setAttribute('aria-pressed', ui.state === s);
+    g.setAttribute('aria-label', `${s}: ${txt}. Filter the task list.`);
+    g.querySelector('.ct').textContent = txt;
+  }
+  const chip = $('stateChip');
+  chip.hidden = !ui.state;
+  if (ui.state) { chip.textContent = `State: ${ui.state} ✕`; chip.style.setProperty('--c', cvar(ui.state)); }
+
+  // task table
+  const q = ui.q.trim().toLowerCase(), rows = $('rows');
+  const vis = S.procs.filter(p => (!ui.state || p.state === ui.state) && (!q || p.name.toLowerCase().includes(q) || String(p.pid).includes(q)));
+  for (const [p, tr] of rowEls) {
+    if (!vis.includes(p)) { tr.remove(); rowEls.delete(p); }
+  }
+  vis.forEach((p, i) => {
+    let tr = rowEls.get(p);
+    if (!tr) {
+      tr = document.createElement('tr');
+      tr.innerHTML = `<td class="nm" title="${esc(p.name)}">${esc(p.name)}</td><td class="num">${p.pid}</td><td><span class="badge"></span></td>` +
+        `<td class="num cput"></td><td class="num">${fmtN(p.mem * 1024)} K</td><td><div class="acts"></div></td>`;
+      rowEls.set(p, tr);
+    }
+    if (tr._state !== p.state) {
+      tr._state = p.state;
+      tr.className = 's-' + p.state.toLowerCase();
+      const badge = tr.querySelector('.badge');
+      badge.textContent = p.state;
+      badge.style.setProperty('--c', cvar(p.state));
+      let btns = '';
+      if (p.state === 'Running') btns = actBtn('interrupt', p, 'Interrupt') + actBtn('io', p, 'Request I/O');
+      if (p.state !== 'Terminated') btns += actBtn('kill', p, 'Kill');
+      tr.querySelector('.acts').innerHTML = btns;
+    }
+    tr.querySelector('.cput').textContent = fmtTime(p.cpu);
+    if (rows.children[i] !== tr) rows.insertBefore(tr, rows.children[i] || null);
+  });
+  $('empty').hidden = vis.length > 0;
+
+  // event log + diagram animation for every transition since the last render
+  const log = $('log');
+  for (const e of S.events) {
+    const li = document.createElement('li');
+    li.innerHTML = `<time>${e.at.toLocaleTimeString('en-GB')}</time><span><b>${esc(e.name)}</b> <span class="meta">${e.pid}</span> ` +
+      `${e.from ? e.from + ' → ' : ''}<span class="st" style="--c:${cvar(e.to)}">${e.to}</span> <span class="meta">${e.label}</span></span>`;
+    log.prepend(li);
+    animate(e.from, e.to);
+  }
+  S.events.length = 0;
+  while (log.children.length > 200) log.lastChild.remove();
+}
+
+/* ----- simulation clock ----- */
+let timer = null;
+function setPlaying(on) {
+  clearInterval(timer);
+  timer = on ? setInterval(() => { tick(); render(); }, 1000 / +$('speed').value) : null;
+  $('play').textContent = on ? 'Pause' : 'Play';
+}
+
+/* ----- terminal ----- */
+function print(text, cls = '') {
+  const out = $('termOut'), d = document.createElement('div');
+  d.textContent = text || ' ';
+  d.className = cls;
+  out.append(d);
+  while (out.children.length > 300) out.firstChild.remove();
+  out.scrollTop = out.scrollHeight;
+}
+const history = [];
+let hi = 0;
+$('termForm').onsubmit = e => {
+  e.preventDefault();
+  const v = $('cmd').value;
+  $('cmd').value = '';
+  if (v.trim()) history.push(v);
+  hi = history.length;
+  print('C:\\>' + v, 'echo');
+  for (const [t, c] of exec(v)) print(t, c);
+  render();
+};
+$('cmd').onkeydown = e => { // Up/Down recall earlier commands
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  e.preventDefault();
+  hi = Math.max(0, Math.min(history.length, hi + (e.key === 'ArrowUp' ? -1 : 1)));
+  $('cmd').value = history[hi] ?? '';
+};
+
+/* ----- wiring ----- */
+$('play').onclick = () => setPlaying(!timer);
+$('step').onclick = () => { tick(); render(); };
+$('speed').onchange = () => timer && setPlaying(true);
+$('reap').onclick = () => { S.procs = live(); render(); };
+$('filter').oninput = e => { ui.q = e.target.value; render(); };
+$('stateChip').onclick = () => { ui.state = null; render(); };
+$('rows').onclick = e => {
+  const b = e.target.closest('[data-act]');
+  if (b) { act(b.dataset.act, b.dataset.pid); render(); }
+};
+const pickNode = e => {
+  const g = e.target.closest('.node');
+  if (!g || (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ')) return;
+  e.preventDefault();
+  ui.state = ui.state === g.dataset.s ? null : g.dataset.s;
+  render();
+};
+fsm.onclick = pickNode;
+fsm.onkeydown = pickNode;
+
+const say = (msg, isErr) => { $('formMsg').textContent = msg; $('formMsg').classList.toggle('err', !!isErr); };
+$('create').onsubmit = e => {
+  e.preventDefault();
+  const res = create($('pname').value, $('pburst').value, $('pmem').value);
+  say(res.error || `Created ${res.proc.name} with PID ${res.proc.pid}.`, res.error);
+  render();
+};
+$('batch').onclick = () => {
+  let made = 0, res;
+  while (made < 5 && !(res = create(POOL[rnd(0, POOL.length - 1)], rnd(3, 12), rnd(2, 40) * 16)).error) made++;
+  say(res.error ? `Spawned ${made} of 5. ${res.error}` : 'Spawned 5 processes.', res.error);
+  render();
+};
+
+$('q').textContent = QUANTUM;
+$('names').innerHTML = POOL.map(n => `<option value="${n}">`).join('');
+buildDiagram();
+print('Try: tasklist, taskkill /pid <PID>, taskkill /f /pid <PID>, help', 'info');
+for (const [n, b, m] of [['chrome.exe', 9, 512], ['code.exe', 7, 384], ['notepad.exe', 3, 24], ['explorer.exe', 5, 96]]) create(n, b, m);
+render();
+setPlaying(true);
+</script>
+</body>
+</html>
